@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Zero Pro - Simulation Haute Qualité</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-elevation@2.5.1/dist/leaflet-elevation.css" />
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            animation: fadeIn 1s ease-in;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .panel {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            backdrop-filter: blur(10px);
+            animation: slideUp 0.8s ease-out;
+        }
+        @keyframes slideUp { from { transform: translateY(50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .clock {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #fff, #e0e0e0);
+            border: 5px solid #2e8b57;
+            margin: 0 auto;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            animation: rotate 2s linear infinite;
+        }
+        @keyframes rotate { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .segment {
+            position: absolute;
+            width: 50%;
+            height: 50%;
+            clip-path: polygon(0 0, 100% 0, 50% 100%);
+            transform-origin: 100% 100%;
+        }
+        .good { background: linear-gradient(45deg, #32cd32, #228b22); }
+        .bad { background: linear-gradient(45deg, #ff6347, #dc143c); }
+        .neutral { background: linear-gradient(45deg, #ffd700, #ffa500); }
+        .center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 15px;
+            height: 15px;
+            background: #000;
+            border-radius: 50%;
+        }
+        .info p {
+            margin: 10px 0;
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+        #map { height: 400px; border-radius: 15px; }
+        #elevation { height: 200px; border-radius: 15px; }
+        button {
+            padding: 12px 25px;
+            background: linear-gradient(45deg, #2e8b57, #3cb371);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+        button:hover { transform: scale(1.05); }
+        input { padding: 10px; border-radius: 10px; border: none; margin: 5px; }
+        .error { color: #ff6347; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Time Zero Pro - Simulation Haute Qualité</h1>
+    <div class="dashboard">
+        <div class="panel">
+            <h2>Horloge de Pêche</h2>
+            <div class="clock">
+                <div class="segment good" id="segment1"></div>
+                <div class="segment bad" id="segment2"></div>
+                <div class="segment neutral" id="segment3"></div>
+                <div class="segment good" id="segment4"></div>
+                <div class="center"></div>
+            </div>
+            <div class="info">
+                <p id="location">Localisation : En cours...</p>
+                <p id="depth">Profondeur : En cours...</p>
+                <p id="fish">Types de poissons : En cours...</p>
+                <p id="tides">Marées : En cours...</p>
+                <p id="weather">Météo : En cours...</p>
+                <p id="moon">Phase lunaire : En cours...</p>
+                <p id="prediction">Prédiction : En cours...</p>
+            </div>
+            <button id="relocateBtn">Relocaliser (GPS)</button>
+            <br>
+            <label>Latitude :</label><input type="text" id="latInput" placeholder="ex: 48.8566">
+            <label>Longitude :</label><input type="text" id="lonInput" placeholder="ex: 2.3522">
+            <button id="manualBtn">Entrer Position Manuelle</button>
+            <p class="error" id="gpsError">GPS : Si indisponible, hébergez sur GitHub Pages pour activer.</p>
+        </div>
+        <div class="panel">
+            <h2>Carte 3D Interactive</h2>
+            <div id="map"></div>
+            <h3>Profil 3D (Bathymétrie)</h3>
+            <div id="elevation"></div>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-elevation@2.5.1/dist/leaflet-elevation.js"></script>
+    <script>
+        let map, marker, elevationControl;
+        
+        function getFishTypes(depth) {
+            if (depth < -50) return 'Thon, Espadon (poissons profonds)';
+            if (depth < -10) return 'Maquereau, Sardine (poissons côtiers)';
+            if (depth > 0) return 'Truite, Carpe (poissons d\'eau douce)';
+            return 'Aucun poisson détecté (zone neutre)';
+        }
+        
+        function loadDepthAndFish(lat, lon) {
+            fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`)
+                .then(response => response.json())
+                .then(data => {
+                    const depth = data.results[0].elevation;
+                    document.getElementById('depth').textContent = `Profondeur : ${depth < 0 ? depth + 'm (sous l\'eau)' : depth + 'm (au-dessus)'} à votre position`;
+                    document.getElementById('fish').textContent = `Types de poissons : ${getFishTypes(depth)}`;
+                })
+                .catch(() => {
+                    document.getElementById('depth').textContent = 'Profondeur : Données non disponibles.';
+                    document.getElementById('fish').textContent = 'Types de poissons : Simulés (Maquereau, Sardine)';
+                });
+        }
+        
+        function initMap(lat, lon) {
+            if (map) map.remove();
+            map = L.map('map').setView([lat, lon], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+            
+            marker = L.marker([lat, lon]).addTo(map).bindPopup('Votre position actuelle').openPopup();
+            L.marker([lat + 0.1, lon + 0.1]).addTo(map).bindPopup('Zone de pêche recommandée');
+            
+            elevationControl = L.control.elevation({
+                position: 'bottomright',
+                theme: 'steelblue-theme',
+                width: 600,
+                height: 125,
+                collapsed: false
+            }).addTo(map);
+            
+            const elevationData = [
+                { lat: lat - 0.1, lng: lon - 0.1, ele: -50 },
+                { lat: lat, lng: lon, ele: -10 },
+                { lat: lat + 0.1, lng: lon + 0.1, ele: -100 }
+            ];
+            elevationControl.addData(elevationData);
+            
+            map.on('click', function(e) {
+                const clickLat = e.latlng.lat;
+                const clickLng = e.latlng.lng;
+                fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${clickLat},${clickLng}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        const depth = data.results[0].elevation;
+                        document.getElementById('depth').textContent = `Profondeur : ${depth < 0 ? depth + 'm (sous l\'eau)' : depth + 'm (au-dessus)'} à ${clickLat.toFixed(2)}, ${clickLng.toFixed(2)}`;
+                        document.getElementById('fish').textContent = `Types de poissons : ${getFishTypes(depth)}`;
+                    })
+                    .catch(() => {
+                        document.getElementById('depth').textContent = 'Erreur : Données non disponibles.';
+                        document.getElementById('fish').textContent = 'Types de poissons : Simulés.';
+                    });
+            });
+        }
+        
+        function loadData(lat, lon) {
+            loadDepthAndFish(lat, lon); // Charge profondeur et poissons à la position actuelle
+            
+            fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=wave_height&timezone=auto`)
+                .then(response => response.json())
+                .then(data => {
+                    const tides = data.hourly?.wave_height?.slice(0, 4).map((h, i) => `${i}h: ${h.toFixed(1)}m`).join(', ') || 'Non disponible';
+                    document.getElementById('tides').textContent = `Marées : ${tides}`;
+                });
+            
+            fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,wind_speed_10m&timezone=auto`)
+                .then(response => response.json())
+                .then(data => {
+                    const temp = data.hourly?.temperature_2m?.[0] || 'N/A';
+                    const wind = data.hourly?.wind_speed_10m?.[0] || 'N/A';
+                    document.getElementById('weather').textContent = `Météo : ${temp}°C, Vent ${wind} km/h`;
+                });
+            
+            const moonPhase = (Date.now() / (29.5 * 24 * 60 * 60 * 1000)) % 1;
+            const phases = ['Nouvelle Lune', 'Premier Croissant', 'Premier Quartier', 'Gibbeuse Croissante', 'Pleine Lune', 'Gibbeuse Décroissante', 'Dernier Quartier', 'Dernier Croissant'];
+            document.getElementById('moon').textContent = `Phase lunaire : ${phases[Math.floor(moonPhase * 8)]}`;
+            
+            const isGoodTime = moonPhase > 0.4 && moonPhase < 0.6;
+            document.getElementById('prediction').textContent = isGoodTime ? 'Prédiction : Bon moment !' : 'Prédiction : Évitez.';
+        }
+        
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(function(position) {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                document.getElementById('location').textContent = `Localisation : ${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+                document.getElementById('gpsError').textContent = '';
+                initMap(lat, lon);
+                loadData(lat, lon);
+            }, function(error) {
+                document.getElementById('location').textContent = 'GPS indisponible : Utilisez la position manuelle ou hébergez sur HTTPS.';
+                document.getElementById('gpsError').textContent = 'Erreur GPS : ' + error.message + '. Hébergez sur GitHub Pages pour activer.';
+                initMap(48.8566, 2.3522); // Paris par défaut
+                loadData(48.8566, 2.3522);
+            });
+        }
+        
+        document.getElementById('relocateBtn').addEventListener('click', () => {
+            navigator.geolocation.getCurrentPosition(position => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                document.getElementById('location').textContent = `Localisation : ${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+                document.getElementById('gpsError').textContent = '';
+                initMap(lat, lon);
+                loadData(lat, lon);
+            }, () => {
+                alert('GPS toujours indisponible. Utilisez la position manuelle.');
+            });
+        });
+        
+        document.getElementById('manualBtn').addEventListener('click', () => {
+            const lat = parseFloat(document.getElementById('latInput').value) || 48.8566;
+            const lon = parseFloat(document.getElementById('lonInput').value) || 2.3522;
+            document.getElementById('location').textContent = `Localisation : ${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+            document.getElementById('gpsError').textContent = '';
+            initMap(lat, lon);
+            loadData(lat, lon);
+        });
+    </script>
+</body>
+</html>
